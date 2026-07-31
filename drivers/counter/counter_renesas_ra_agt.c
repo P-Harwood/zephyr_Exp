@@ -48,8 +48,6 @@ extern void agt_int_isr(void);
 extern void agtcmai_isr(void);
 extern void agtcmbi_isr(void);
 
-
-
 static inline bool renesas_ra_agt_is_running(const struct device *dev)
 {
 	struct counter_renesas_ra_agt_data *data = dev->data;
@@ -353,12 +351,11 @@ static int counter_renesas_ra_agt_set_alarm(const struct device *dev, uint8_t ch
 	int ret = 0;
 
 
-	if(chan >= CHANNEL_COUNT){
+	if(chan >= CHANNEL_COUNT){ // >= is correct
 		ret = -EINVAL;
 		goto out;
 	}
 	timer_compare_match_t channel = (timer_compare_match_t) chan;
-
 
 	if (alarm_cfg->ticks > top) {
 		ret = -EINVAL;
@@ -370,7 +367,7 @@ static int counter_renesas_ra_agt_set_alarm(const struct device *dev, uint8_t ch
 		goto out;
 	}
 
-	if (data->agt_irq[(int)chan] == BSP_IRQ_DISABLED) {
+	if (data->agt_irq[chan] == BSP_IRQ_DISABLED) {
 		return -ENOTSUP;
 	}
 
@@ -393,7 +390,6 @@ static int counter_renesas_ra_agt_cancel_alarm(const struct device *dev, uint8_t
 	fsp_err_t err;
 	int ret = 0;
 
-
 	if (data->agt_irq[(int)chan] == BSP_IRQ_DISABLED) {
 		ret = -ENOTSUP;
 		goto out;
@@ -406,10 +402,8 @@ static int counter_renesas_ra_agt_cancel_alarm(const struct device *dev, uint8_t
 
 	irq_disable(data->agt_irq[(int)chan]);
 	NVIC_ClearPendingIRQ(data->agt_irq[(int)chan]);
-
 	data->alarm_cb[chan] = NULL;
 	data->alarm_data[chan] = NULL;
-	ret = 0;
 out:
 	counter_renesas_ra_agt_unlock(dev, key);
 	return ret;
@@ -495,9 +489,6 @@ static int counter_renesas_ra_agt_init(const struct device *dev)
 	return 0;
 }
 
-
-
-
 static void counter_renesas_ra_agt_agti_isr(const struct device *dev)
 {
 	struct counter_renesas_ra_agt_data *data = dev->data;
@@ -511,7 +502,6 @@ static void counter_renesas_ra_agt_agti_isr(const struct device *dev)
 	agt_int_isr();
 }
  
-
 
 static void counter_renesas_ra_agt_agtcmXi_isr(const struct device *dev, uint16_t chan)
 {
@@ -533,8 +523,6 @@ static void counter_renesas_ra_agt_agtcmXi_isr(const struct device *dev, uint16_
 
 		cb(dev, chan, now, usr_data);
 	}
-
-	
 }
 
 static void counter_ra_chan_a(const struct device* dev){counter_renesas_ra_agt_agtcmXi_isr(dev, (int)TIMER_COMPARE_MATCH_A);agtcmai_isr();};
