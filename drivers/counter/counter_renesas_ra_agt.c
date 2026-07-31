@@ -4,10 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-
 #define DT_DRV_COMPAT renesas_ra_agt_counter
-
-
 
 #include <soc.h>
 #include <zephyr/kernel.h>
@@ -21,9 +18,6 @@
 LOG_MODULE_REGISTER(counter_renesas_ra_agt, CONFIG_COUNTER_LOG_LEVEL);
 
 #define CHANNEL_COUNT 2
-
-
-
 
 struct counter_renesas_ra_agt_config {
 	struct counter_config_info info;
