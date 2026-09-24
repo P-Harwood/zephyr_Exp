@@ -23,6 +23,14 @@ config FLASH_RENESAS_RA_HP_BGO
 	help
 	  Enable Background operations (BGOs)
 
+config FLASH_RENESAS_RA_HP_BANK_SWAP
+	bool "Extended operation for code flash bank swap"
+	depends on SOC_SERIES_RA6M5 || SOC_SERIES_RA4L1
+	select FLASH_HAS_EX_OP
+	help
+	  Enable the FLASH_RA_EX_OP_BANK_SWAP extended operation, which swaps the
+	  code flash bank mapped at address 0 with the other bank on the next reset.
+
 config FLASH_RENESAS_RA_HP_CHECK_BEFORE_READING
 	bool "Verify area before reading it"
 	default $(dt_nodelabel_bool_prop,flash1,erase-value-undefined)

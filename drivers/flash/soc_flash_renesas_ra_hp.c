@@ -14,6 +14,8 @@
 #include <zephyr/init.h>
 #include <zephyr/irq.h>
 #include <zephyr/drivers/flash.h>
+#include <zephyr/drivers/flash/ra_flash_api_extensions.h>
+#include <zephyr/sys/sys_io.h>
 #include <zephyr/sys/atomic.h>
 #include <r_flash_hp.h>
 #include <r_flash_api.h>
@@ -23,8 +25,8 @@
 LOG_MODULE_REGISTER(flash_renesas_ra_hp, CONFIG_FLASH_LOG_LEVEL);
 
 #define FLASH_HP_CMD_INTERFACE_NODE DT_NODELABEL(faci)
-/* Maximum number of page layout */
-#define FLASH_HP_MAX_LAYOUT_SIZE    2U
+/* Maximum number of page layout: two regions per bank, plus the gap*/
+#define FLASH_HP_MAX_LAYOUT_SIZE    5U
 
 enum flash_region {
 	CODE_FLASH,
@@ -222,22 +224,12 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 	}
 
 	if ((offset + len) == flash_data->area_size) {
-		flash_info_t info;
-		flash_regions_t *regions;
 		uint32_t total_blocks = 0;
 
-		err = R_FLASH_HP_InfoGet(&interface->flash_ctrl, &info);
-		if (err != FSP_SUCCESS) {
-			return -EIO;
+		for (uint8_t i = 0; i < flash_data->num_region; i++) {
+			total_blocks += flash_data->flash_ra_layout[i].pages_count;
 		}
-		regions = (flash_data->flash_region == CODE_FLASH) ? &info.code_flash
-								   : &info.data_flash;
 
-		for (uint32_t i = 0; i < regions->num_regions; i++) {
-			total_blocks += (regions->p_block_array[i].block_section_end_addr -
-					 regions->p_block_array[i].block_section_st_addr + 1) /
-					regions->p_block_array[i].block_size;
-		}
 		page_info_len.index = total_blocks;
 		is_contain_end_block = true;
 	}
@@ -379,6 +371,50 @@ static const struct flash_parameters *flash_ra_get_parameters(const struct devic
 	return &config->flash_ra_parameters;
 }
 
+#if defined(CONFIG_FLASH_RENESAS_RA_HP_BANK_SWAP)
+static int flash_ra_bank_swap(const struct device *dev)
+{
+	struct flash_hp_ra_data *flash_data = dev->data;
+	struct flash_hp_ra_cmd_interface *interface = flash_data->cmd_interface_dev->data;
+	fsp_err_t err;
+	int key;
+
+	if (flash_data->flash_region != CODE_FLASH) {
+		return -ENOTSUP;
+	}
+
+	/* Lock while modifying the option setting memory.
+	 */
+	key = irq_lock();
+	err = R_FLASH_HP_BankSwap(&interface->flash_ctrl);
+	irq_unlock(key);
+
+	if (err == FSP_ERR_INVALID_MODE) {
+		/* Code flash is in linear mode */
+		return -ENOTSUP;
+	}
+
+	return (err == FSP_SUCCESS) ? 0 : -EIO;
+}
+#endif /* CONFIG_FLASH_RENESAS_RA_HP_BANK_SWAP */
+
+#ifdef CONFIG_FLASH_EX_OP_ENABLED
+static int flash_ra_ex_op(const struct device *dev, uint16_t code, const uintptr_t in, void *out)
+{
+	ARG_UNUSED(in);
+	ARG_UNUSED(out);
+
+	switch (code) {
+#if defined(CONFIG_FLASH_RENESAS_RA_HP_BANK_SWAP)
+	case FLASH_RA_EX_OP_BANK_SWAP:
+		return flash_ra_bank_swap(dev);
+#endif /* CONFIG_FLASH_RENESAS_RA_HP_BANK_SWAP */
+	default:
+		return -ENOTSUP;
+	}
+}
+#endif /* CONFIG_FLASH_EX_OP_ENABLED */
+
 static struct flash_hp_ra_cmd_interface flash_hp_ra_cmd_interface = {
 	.fsp_config = {
 		.data_flash_bgo = IS_ENABLED(CONFIG_FLASH_RENESAS_RA_HP_BGO),
@@ -391,6 +427,40 @@ static struct flash_hp_ra_cmd_interface flash_hp_ra_cmd_interface = {
 		.ipl = DT_IRQ_BY_NAME(FLASH_HP_CMD_INTERFACE_NODE, frdyi, priority),
 #endif /* CONFIG_FLASH_RENESAS_RA_HP_BGO */
 	}};
+
+#if defined(CONFIG_FLASH_PAGE_LAYOUT) && DT_NODE_EXISTS(DT_NODELABEL(option_setting_dualsel))
+/* DUALSEL.BANKMD: 000b dual bank mode, 111b linear mode */
+#define FLASH_HP_DUALSEL_BANKMD_MASK 0x7U
+
+static bool flash_ra_dual_bank_mode(void)
+{
+	uint32_t dualsel = sys_read32(DT_REG_ADDR(DT_NODELABEL(option_setting_dualsel)));
+
+	return (dualsel & FLASH_HP_DUALSEL_BANKMD_MASK) == 0U;
+}
+
+static void flash_ra_set_dual_bank_layout(struct flash_hp_ra_data *flash_data,
+					  const flash_regions_t *regions)
+{
+	const flash_block_info_t *small = &regions->p_block_array[0];
+	const flash_block_info_t *large = &regions->p_block_array[1];
+	uint32_t small_area_size = small->block_section_end_addr - small->block_section_st_addr + 1;
+	uint32_t bank_size = BSP_ROM_SIZE_BYTES / 2;
+	uint32_t hole_size = BSP_FEATURE_FLASH_HP_CF_DUAL_BANK_START - bank_size;
+	struct flash_pages_layout *layout = flash_data->flash_ra_layout;
+
+	layout[0].pages_size = small->block_size;
+	layout[0].pages_count = small_area_size / small->block_size;
+	layout[1].pages_size = large->block_size;
+	layout[1].pages_count = (bank_size - small_area_size) / large->block_size;
+	layout[2].pages_size = large->block_size;
+	layout[2].pages_count = hole_size / large->block_size;
+	layout[3] = layout[0];
+	layout[4] = layout[1];
+
+	flash_data->num_region = 5;
+}
+#endif
 
 static int flash_ra_init(const struct device *dev)
 {
@@ -426,6 +496,12 @@ static int flash_ra_init(const struct device *dev)
 	}
 
 	flash_data->num_region = regions->num_regions;
+
+#if DT_NODE_EXISTS(DT_NODELABEL(option_setting_dualsel))
+	if (flash_data->flash_region == CODE_FLASH && flash_ra_dual_bank_mode()) {
+		flash_ra_set_dual_bank_layout(flash_data, regions);
+	}
+#endif
 
 #endif /* CONFIG_FLASH_PAGE_LAYOUT */
 	return 0;
@@ -484,6 +560,9 @@ static DEVICE_API(flash, flash_ra_api) = {
 	.get_size = flash_ra_get_size,
 #ifdef CONFIG_FLASH_PAGE_LAYOUT
 	.page_layout = flash_ra_page_layout,
+#endif
+#ifdef CONFIG_FLASH_EX_OP_ENABLED
+	.ex_op = flash_ra_ex_op,
 #endif
 };
 
