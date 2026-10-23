@@ -17,6 +17,12 @@ config SOC_FLASH_RENESAS_RA_HP
 
 if SOC_FLASH_RENESAS_RA_HP
 
+config FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	bool "Enable interrupts during flash operations"
+	default n
+	help
+	  Disables the irq_lock around code flash operations.
+
 config FLASH_RENESAS_RA_HP_BGO
 	bool "Background operations feature"
 	default y
