@@ -48,8 +48,9 @@ enum flash_region {
 struct flash_hp_ra_cmd_interface {
 	struct st_flash_hp_instance_ctrl flash_ctrl;
 	struct st_flash_cfg fsp_config;
-#if defined(CONFIG_FLASH_RENESAS_RA_HP_BGO)
 	struct k_sem interface_sem;
+#if defined(CONFIG_FLASH_RENESAS_RA_HP_BGO)
+
 	atomic_t flags;
 #endif /* CONFIG_FLASH_RENESAS_RA_HP_BGO */
 };
@@ -201,7 +202,10 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 	fsp_err_t err;
 	uint32_t block_num;
 	int rc, rc2, ret = 0;
+	uint32_t flash_address = flash_data->area_address + offset;
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
 	int key = 0;
+#endif
 	bool is_contain_end_block = false;
 
 	if (!flash_ra_valid_range(flash_data, offset, len)) {
@@ -211,6 +215,12 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 	if (!len) {
 		return 0;
 	}
+	#ifdef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	if (flash_data->flash_region == CODE_FLASH &&
+	    flash_address < BSP_FEATURE_FLASH_HP_CF_DUAL_BANK_START) {
+		return -EACCES;
+	}
+#endif
 
 	LOG_DBG("flash: erase 0x%lx, len: %u", (long)(offset + flash_data->area_address), len);
 
@@ -247,44 +257,49 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 
 	block_num = (uint32_t)(page_info_len.index - page_info_off.index);
 
-	if (block_num > 0) {
-		if (flash_data->flash_region == CODE_FLASH) {
-			/* Disable interrupts during code flash operations */
-			key = irq_lock();
-		} else {
-			k_sem_take(&interface->interface_sem, K_FOREVER);
-		}
+	if (block_num == 0) {
+		return 0;
+	}
 
-		err = R_FLASH_HP_Erase(&interface->flash_ctrl,
-				       (long)(flash_data->area_address + offset), block_num);
-		if (err != FSP_SUCCESS) {
-			ret = -EIO;
-			goto end;
-		}
+	/* Use semaphores regardless, will cover the situation where it is code flash but interrupts are enabled.*/
+	k_sem_take(&interface->interface_sem, K_FOREVER);
+
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	if (flash_data->flash_region == CODE_FLASH) {
+		key = irq_lock();
+	}
+#endif
+
+
+	err = R_FLASH_HP_Erase(&interface->flash_ctrl,
+					(long)(flash_data->area_address + offset), block_num);
+	if (err != FSP_SUCCESS) {
+		ret = -EIO;
+		goto end;
+	}
 
 #if defined(CONFIG_FLASH_RENESAS_RA_HP_BGO)
-		if (flash_data->flash_region == DATA_FLASH) {
-			/* Wait for the erase complete event flag, if BGO is SET  */
-			while (!(interface->flags & FLASH_FLAG_ERASE_COMPLETE)) {
-				if (interface->flags & FLASH_FLAG_GET_ERROR) {
-					ret = -EIO;
-					atomic_and(&interface->flags, ~FLASH_FLAG_GET_ERROR);
-					break;
-				}
-				k_sleep(K_USEC(10));
+	if (flash_data->flash_region == DATA_FLASH) {
+		/* Wait for the erase complete event flag, if BGO is SET  */
+		while (!(interface->flags & FLASH_FLAG_ERASE_COMPLETE)) {
+			if (interface->flags & FLASH_FLAG_GET_ERROR) {
+				ret = -EIO;
+				atomic_and(&interface->flags, ~FLASH_FLAG_GET_ERROR);
+				break;
 			}
-			atomic_and(&interface->flags, ~FLASH_FLAG_ERASE_COMPLETE);
+			k_sleep(K_USEC(10));
 		}
+		atomic_and(&interface->flags, ~FLASH_FLAG_ERASE_COMPLETE);
+	}
 #endif /* CONFIG_FLASH_RENESAS_RA_HP_BGO */
 
 end:
-		if (flash_data->flash_region == CODE_FLASH) {
-			irq_unlock(key);
-		} else {
-			k_sem_give(&interface->interface_sem);
-		}
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	if (flash_data->flash_region == CODE_FLASH) {
+		irq_unlock(key);
 	}
-
+#endif
+	k_sem_give(&interface->interface_sem);
 	return ret;
 }
 
@@ -293,8 +308,12 @@ static int flash_ra_write(const struct device *dev, off_t offset, const void *da
 	fsp_err_t err;
 	struct flash_hp_ra_data *flash_data = dev->data;
 	struct flash_hp_ra_cmd_interface *interface = flash_data->cmd_interface_dev->data;
-	int key = 0;
+
 	int ret = 0;
+	uint32_t flash_address = flash_data->area_address + offset;
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	int key = 0;
+#endif
 
 	if (!flash_ra_valid_range(flash_data, offset, len)) {
 		return -EINVAL;
@@ -303,15 +322,22 @@ static int flash_ra_write(const struct device *dev, off_t offset, const void *da
 	if (!len) {
 		return 0;
 	}
+#ifdef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	if (flash_data->flash_region == CODE_FLASH &&
+	    flash_address < BSP_FEATURE_FLASH_HP_CF_DUAL_BANK_START) {
+		return -EACCES;
+	}
+#endif
 
 	LOG_DBG("flash: write 0x%lx, len: %u", (long)(offset + flash_data->area_address), len);
 
+	/* Use semaphores regardless, will cover the situation where it is code flash but interrupts are enabled.*/
+	k_sem_take(&interface->interface_sem, K_FOREVER);
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
 	if (flash_data->flash_region == CODE_FLASH) {
-		/* Disable interrupts during code flash operations */
 		key = irq_lock();
-	} else {
-		k_sem_take(&interface->interface_sem, K_FOREVER);
 	}
+#endif
 
 	err = R_FLASH_HP_Write(&interface->flash_ctrl, (uint32_t)data,
 			       (long)(offset + flash_data->area_address), len);
@@ -336,11 +362,13 @@ static int flash_ra_write(const struct device *dev, off_t offset, const void *da
 #endif /* CONFIG_FLASH_RENESAS_RA_HP_BGO */
 
 end:
+
+#ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
 	if (flash_data->flash_region == CODE_FLASH) {
 		irq_unlock(key);
-	} else {
-		k_sem_give(&interface->interface_sem);
 	}
+#endif
+	k_sem_give(&interface->interface_sem);
 
 	return ret;
 }
@@ -385,9 +413,11 @@ static int flash_ra_bank_swap(const struct device *dev)
 
 	/* Lock while modifying the option setting memory.
 	 */
+	k_sem_take(&interface->interface_sem, K_FOREVER);
 	key = irq_lock();
 	err = R_FLASH_HP_BankSwap(&interface->flash_ctrl);
 	irq_unlock(key);
+	k_sem_give(&interface->interface_sem);
 
 	if (err == FSP_ERR_INVALID_MODE) {
 		/* Code flash is in linear mode */
