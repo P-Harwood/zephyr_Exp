@@ -48,9 +48,8 @@ enum flash_region {
 struct flash_hp_ra_cmd_interface {
 	struct st_flash_hp_instance_ctrl flash_ctrl;
 	struct st_flash_cfg fsp_config;
-	struct k_sem interface_sem;
+	struct k_sem interface_sem; /* Now using this for irqlockless application*/
 #if defined(CONFIG_FLASH_RENESAS_RA_HP_BGO)
-
 	atomic_t flags;
 #endif /* CONFIG_FLASH_RENESAS_RA_HP_BGO */
 };
@@ -202,7 +201,6 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 	fsp_err_t err;
 	uint32_t block_num;
 	int rc, rc2, ret = 0;
-	uint32_t flash_address = flash_data->area_address + offset;
 #ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
 	int key = 0;
 #endif
@@ -216,6 +214,7 @@ static int flash_ra_erase(const struct device *dev, off_t offset, size_t len)
 		return 0;
 	}
 	#ifdef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	uint32_t flash_address = flash_data->area_address + offset;
 	if (flash_data->flash_region == CODE_FLASH &&
 	    flash_address < BSP_FEATURE_FLASH_HP_CF_DUAL_BANK_START) {
 		return -EACCES;
@@ -310,7 +309,6 @@ static int flash_ra_write(const struct device *dev, off_t offset, const void *da
 	struct flash_hp_ra_cmd_interface *interface = flash_data->cmd_interface_dev->data;
 
 	int ret = 0;
-	uint32_t flash_address = flash_data->area_address + offset;
 #ifndef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
 	int key = 0;
 #endif
@@ -323,6 +321,7 @@ static int flash_ra_write(const struct device *dev, off_t offset, const void *da
 		return 0;
 	}
 #ifdef CONFIG_FLASH_RENESAS_RA_HP_IRQ_ENABLED
+	uint32_t flash_address = flash_data->area_address + offset;
 	if (flash_data->flash_region == CODE_FLASH &&
 	    flash_address < BSP_FEATURE_FLASH_HP_CF_DUAL_BANK_START) {
 		return -EACCES;
